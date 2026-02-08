@@ -1,7 +1,7 @@
 [project]
 name = "dugcanlinktester"
-version = "0.1.0"
-description = "J1939 CAN Joystick Monitor with PySide6 GUI"
+version = "0.2.0"
+description = "J1939 CAN Joystick binary protocol library + monitor GUI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,5 +9,17 @@ dependencies = [
     "pyserial>=3.5",
 ]
 
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["DugCanLinker"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
 [project.scripts]
-dugcanlinktester = "main:main"
+joystick-monitor  = "DugCanLinker.joystick_monitor:main"
+joystick-receiver = "DugCanLinker.joystick_receiver:main"
