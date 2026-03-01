@@ -5,8 +5,8 @@ file: /DugCanLinker/joystick_monitor.py
 desc : J1939 조이스틱 PySide6 GUI 모니터
 
 사용법:
-  python -m DugCanLinker.joystick_monitor --help
-  python -m DugCanLinker.joystick_monitor --port COM3
+  uv run joystick-monitor --help
+  uv run joystick-monitor --port COM3 --hid
   
 작성자: gbox3d
 작성일: 2026-02-08
@@ -23,12 +23,14 @@ from PySide6.QtGui import QPainter, QColor, QPen, QFont, QPainterPath
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QGroupBox, QComboBox, QPushButton, QFrame, QSizePolicy,
+    QCheckBox, QDoubleSpinBox, QMessageBox,
 )
 
 import serial.tools.list_ports
 
 from .protocol import AxisState, MainPacket, AuxPacket, PKT_MAIN, PKT_AUX
 from .serial_receiver import PacketParser, ReceiverStats
+from .vortex_hid import VortexHID
 
 import serial as pyserial
 
@@ -300,7 +302,16 @@ class AxisStatusPanel(QWidget):
 
 class JoystickMonitorWindow(QMainWindow):
 
-    def __init__(self, initial_port: str = "", baud: int = 115200):
+    def __init__(
+        self,
+        initial_port: str = "",
+        baud: int = 115200,
+        enable_hid: bool = False,
+        hid_deadzone: float = 0.03,
+        hid_expo: float = 1.0,
+        hid_aux_expo: float = 1.0,
+        invert_y: bool = True,
+    ):
         super().__init__()
         self.setWindowTitle("J1939 CAN Joystick Monitor")
         self.setMinimumSize(800, 700)
@@ -309,6 +320,9 @@ class JoystickMonitorWindow(QMainWindow):
         self._baud = baud
         self._reader: SerialReaderThread | None = None
         self._pkt_count = 0
+        self._hid: VortexHID | None = None
+        self._last_main: MainPacket | None = None
+        self._last_aux: AuxPacket | None = None
 
         # ─── 중앙 위젯 ───
         central = QWidget()
@@ -342,6 +356,15 @@ class JoystickMonitorWindow(QMainWindow):
         self.stats_label = QLabel("pkt: 0  err: 0")
         self.stats_label.setStyleSheet("color: #666; font-family: Consolas; font-size: 9pt;")
 
+        group_style = """
+            QGroupBox {
+                color: #aaa; border: 1px solid #444; border-radius: 4px;
+                margin-top: 8px; padding-top: 14px;
+                font-family: Consolas; font-size: 9pt;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; }
+        """
+
         conn.addWidget(QLabel("Port:"))
         conn.addWidget(self.port_combo)
         conn.addWidget(refresh_btn)
@@ -356,6 +379,54 @@ class JoystickMonitorWindow(QMainWindow):
         line.setFrameShadow(QFrame.Sunken)
         root.addWidget(line)
 
+        hid_group = QGroupBox("Vortex HID Link")
+        hid_group.setStyleSheet(group_style)
+        hid_row = QHBoxLayout(hid_group)
+        hid_row.setSpacing(8)
+
+        self.hid_enable = QCheckBox("Xbox Virtual Pad")
+        self.hid_enable.toggled.connect(self._on_hid_toggled)
+
+        self.hid_status_label = QLabel("Disabled")
+        self.hid_status_label.setStyleSheet("color: #888; font-family: Consolas; font-size: 9pt;")
+
+        self.deadzone_spin = QDoubleSpinBox()
+        self.deadzone_spin.setRange(0.0, 0.90)
+        self.deadzone_spin.setSingleStep(0.01)
+        self.deadzone_spin.setDecimals(2)
+        self.deadzone_spin.setValue(hid_deadzone)
+        self.deadzone_spin.valueChanged.connect(self._sync_hid_settings)
+
+        self.expo_spin = QDoubleSpinBox()
+        self.expo_spin.setRange(1.0, 4.0)
+        self.expo_spin.setSingleStep(0.10)
+        self.expo_spin.setDecimals(2)
+        self.expo_spin.setValue(hid_expo)
+        self.expo_spin.valueChanged.connect(self._sync_hid_settings)
+
+        self.aux_expo_spin = QDoubleSpinBox()
+        self.aux_expo_spin.setRange(1.0, 4.0)
+        self.aux_expo_spin.setSingleStep(0.10)
+        self.aux_expo_spin.setDecimals(2)
+        self.aux_expo_spin.setValue(hid_aux_expo)
+        self.aux_expo_spin.valueChanged.connect(self._sync_hid_settings)
+
+        self.invert_y_check = QCheckBox("Invert Y")
+        self.invert_y_check.setChecked(invert_y)
+        self.invert_y_check.toggled.connect(self._sync_hid_settings)
+
+        hid_row.addWidget(self.hid_enable)
+        hid_row.addWidget(QLabel("Deadzone"))
+        hid_row.addWidget(self.deadzone_spin)
+        hid_row.addWidget(QLabel("Main Expo"))
+        hid_row.addWidget(self.expo_spin)
+        hid_row.addWidget(QLabel("AUX Expo"))
+        hid_row.addWidget(self.aux_expo_spin)
+        hid_row.addWidget(self.invert_y_check)
+        hid_row.addStretch()
+        hid_row.addWidget(self.hid_status_label)
+        root.addWidget(hid_group)
+
         # ─── 그래프 ───
         self.graph_x   = AxisGraphWidget("X Axis (Left/Right)", QColor(80, 180, 255))
         self.graph_y   = AxisGraphWidget("Y Axis (Back/Forward)", QColor(255, 160, 60))
@@ -367,15 +438,6 @@ class JoystickMonitorWindow(QMainWindow):
         # ─── 하단: 상태 + 버튼 ───
         bottom = QHBoxLayout()
         bottom.setSpacing(12)
-
-        group_style = """
-            QGroupBox {
-                color: #aaa; border: 1px solid #444; border-radius: 4px;
-                margin-top: 8px; padding-top: 14px;
-                font-family: Consolas; font-size: 9pt;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; }
-        """
 
         status_group = QGroupBox("Axis Status (2-bit fields)")
         status_group.setStyleSheet(group_style)
@@ -413,16 +475,84 @@ class JoystickMonitorWindow(QMainWindow):
         self.setStyleSheet("""
             QMainWindow, QWidget { background-color: #1e1e23; color: #ddd; }
             QLabel { font-family: Consolas; font-size: 10pt; }
-            QComboBox, QPushButton {
+            QComboBox, QPushButton, QDoubleSpinBox {
                 background-color: #2a2a30; color: #ccc;
                 border: 1px solid #555; border-radius: 3px;
                 padding: 4px 8px; font-family: Consolas;
             }
+            QCheckBox { font-family: Consolas; font-size: 9pt; color: #ccc; }
             QPushButton:hover { background-color: #3a3a42; }
             QPushButton:pressed { background-color: #222228; }
         """)
 
+        if enable_hid:
+            self.hid_enable.setChecked(True)
+
     # ─── 포트 ───
+
+    def _set_hid_status(self, text: str, color: str):
+        self.hid_status_label.setText(text)
+        self.hid_status_label.setStyleSheet(
+            f"color: {color}; font-family: Consolas; font-size: 9pt;"
+        )
+
+    def _on_hid_toggled(self, enabled: bool):
+        if enabled:
+            try:
+                self._hid = VortexHID()
+            except Exception as e:
+                self._hid = None
+                self._set_hid_status("Unavailable", "#c88")
+                self.hid_enable.blockSignals(True)
+                self.hid_enable.setChecked(False)
+                self.hid_enable.blockSignals(False)
+                QMessageBox.warning(
+                    self,
+                    "HID Link",
+                    "vgamepad 초기화에 실패했습니다.\n"
+                    "uv sync --extra hid 후 다시 실행하세요.\n\n"
+                    f"detail: {e}",
+                )
+                return
+
+            self._sync_hid_settings()
+            self._set_hid_status("Enabled  (verify: joy.cpl)", "#0d8")
+            if self._last_main or self._last_aux:
+                self._hid.update_from_packets(self._last_main, self._last_aux)
+            return
+
+        if self._hid:
+            self._hid.reset()
+        self._hid = None
+        self._set_hid_status("Disabled", "#888")
+
+    def _sync_hid_settings(self, *_args):
+        if not self._hid:
+            return
+
+        deadzone = self.deadzone_spin.value()
+        main_expo = self.expo_spin.value()
+        aux_expo = self.aux_expo_spin.value()
+        invert_y = self.invert_y_check.isChecked()
+
+        self._hid.left_x.deadzone = deadzone
+        self._hid.left_x.expo = main_expo
+
+        self._hid.left_y.deadzone = deadzone
+        self._hid.left_y.expo = main_expo
+        self._hid.left_y.invert = invert_y
+
+        self._hid.right_y.deadzone = deadzone
+        self._hid.right_y.expo = aux_expo
+
+        if self._last_main or self._last_aux:
+            self._hid.update_from_packets(self._last_main, self._last_aux)
+
+    def _reset_hid_output(self):
+        self._last_main = None
+        self._last_aux = None
+        if self._hid:
+            self._hid.reset()
 
     def _refresh_ports(self):
         self.port_combo.clear()
@@ -433,6 +563,7 @@ class JoystickMonitorWindow(QMainWindow):
         if self._reader and self._reader.isRunning():
             self._reader.stop()
             self._reader = None
+            self._reset_hid_output()
             self.connect_btn.setText("Connect")
             self.status_label.setText("Disconnected")
             self.status_label.setStyleSheet("color: #888;")
@@ -456,6 +587,7 @@ class JoystickMonitorWindow(QMainWindow):
             self.status_label.setText("Connected")
             self.status_label.setStyleSheet("color: #0d8;")
         else:
+            self._reset_hid_output()
             self.status_label.setText("Disconnected")
             self.status_label.setStyleSheet("color: #888;")
             self.connect_btn.setText("Connect")
@@ -464,6 +596,7 @@ class JoystickMonitorWindow(QMainWindow):
 
     def _on_main(self, pkt: MainPacket):
         self._pkt_count += 1
+        self._last_main = pkt
 
         self.graph_x.push_axis(pkt.x)
         self.graph_y.push_axis(pkt.y)
@@ -476,10 +609,17 @@ class JoystickMonitorWindow(QMainWindow):
         self.led_btn3.set_value(pkt.buttons.btn3)
         self.led_btn4.set_value(pkt.buttons.btn4)
 
+        if self._hid:
+            self._hid.update_main(pkt)
+
     def _on_aux(self, pkt: AuxPacket):
         self._pkt_count += 1
+        self._last_aux = pkt
         self.graph_aux.push_axis(pkt.x)
         self.aux_status.update_axis(pkt.x)
+
+        if self._hid:
+            self._hid.update_aux(pkt)
 
     def _on_stats(self, stats: ReceiverStats):
         self.stats_label.setText(f"pkt: {self._pkt_count}  err: {stats.errors}")
@@ -492,6 +632,7 @@ class JoystickMonitorWindow(QMainWindow):
     def closeEvent(self, event):
         if self._reader:
             self._reader.stop()
+        self._reset_hid_output()
         event.accept()
 
 
@@ -503,10 +644,23 @@ def main():
     parser = argparse.ArgumentParser(description="J1939 Joystick Monitor (GUI)")
     parser.add_argument("--port", "-p", default="", help="Serial port")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--hid", action="store_true", help="Enable virtual Xbox HID link on startup")
+    parser.add_argument("--deadzone", type=float, default=0.03, help="HID axis deadzone")
+    parser.add_argument("--expo", type=float, default=1.0, help="HID main axis exponential curve")
+    parser.add_argument("--aux-expo", type=float, default=1.0, help="HID AUX axis exponential curve")
+    parser.add_argument("--no-invert-y", action="store_true", help="Do not invert HID Y axis")
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
-    win = JoystickMonitorWindow(initial_port=args.port, baud=args.baud)
+    win = JoystickMonitorWindow(
+        initial_port=args.port,
+        baud=args.baud,
+        enable_hid=args.hid,
+        hid_deadzone=args.deadzone,
+        hid_expo=args.expo,
+        hid_aux_expo=args.aux_expo,
+        invert_y=not args.no_invert_y,
+    )
     win.show()
     sys.exit(app.exec())
 

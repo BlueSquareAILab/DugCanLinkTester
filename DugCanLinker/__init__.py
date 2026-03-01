@@ -21,6 +21,9 @@ from .protocol import (
 from .serial_receiver import (
     PacketParser, SerialReceiver, ReceiverStats,
 )
+from .vortex_hid import (
+    AxisMapper, VortexHID,
+)
 
 __all__ = [
     "SYNC1", "SYNC2", "PKT_MAIN", "PKT_AUX",
@@ -30,4 +33,5 @@ __all__ = [
     "xor_checksum", "verify_packet",
     "format_main", "format_aux",
     "PacketParser", "SerialReceiver", "ReceiverStats",
+    "AxisMapper", "VortexHID",
 ]

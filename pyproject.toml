@@ -9,6 +9,11 @@ dependencies = [
     "pyserial>=3.5",
 ]
 
+[project.optional-dependencies]
+hid = [
+    "vgamepad",
+]
+
 [tool.uv]
 package = true
 

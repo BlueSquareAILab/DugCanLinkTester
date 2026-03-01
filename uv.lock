@@ -11,11 +11,18 @@ dependencies = [
     { name = "pyside6" },
 ]
 
+[package.optional-dependencies]
+hid = [
+    { name = "vgamepad" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "pyserial", specifier = ">=3.5" },
     { name = "pyside6", specifier = ">=6.6" },
+    { name = "vgamepad", marker = "extra == 'hid'" },
 ]
+provides-extras = ["hid"]
 
 [[package]]
 name = "pyserial"
@@ -85,3 +92,9 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/71/5d/5ca52c0ef86b3d01572131b6709bd531a080995f7e680720e9424328ce1d/shiboken6-6.10.2-cp39-abi3-win_amd64.whl", hash = "sha256:10f3c8c5e1b8bee779346f21c10dbc14cff068f0b0b4e62420c82a6bf36ac2e7", size = 1222052, upload-time = "2026-02-02T08:50:27.502Z" },
     { url = "https://files.pythonhosted.org/packages/46/52/421fd378313c89b67ee7d584bf4e9ec088fa1804891b8d74e02b16703457/shiboken6-6.10.2-cp39-abi3-win_arm64.whl", hash = "sha256:20c671645d70835af212ee05df60361d734c5305edb2746e9875c6a31283f963", size = 1784089, upload-time = "2026-02-02T08:50:29.069Z" },
 ]
+
+[[package]]
+name = "vgamepad"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/54/0eaddc33f84247963af078f364b37153d09fcd6cdc398f243ec3e8842c56/vgamepad-0.1.0.tar.gz", hash = "sha256:57f6bd01aec0c172947517fb782d150ef9b285f7f4d524c317374fa5c24a89de", size = 1174896, upload-time = "2023-10-14T20:29:06.154Z" }
