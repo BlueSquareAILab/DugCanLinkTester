@@ -31,6 +31,7 @@ from .protocol import (
     MainPacket, AuxPacket,
     parse_main_payload, parse_aux_payload,
     verify_packet,
+    parse_text_line,
 )
 
 
@@ -152,6 +153,56 @@ class PacketParser:
 
 
 # ═══════════════════════════════════════════════════════
+#  TextLineParser — 텍스트 라인 기반 파서
+# ═══════════════════════════════════════════════════════
+
+class TextLineParser:
+    """
+    Arduino Serial.print() 텍스트 출력을 줄 단위로 파싱하는 상태머신.
+
+    바이트를 한 개씩 feed()하면 줄바꿈 시 파싱 결과를 반환한다.
+    PacketParser와 동일한 인터페이스를 제공하므로 교체 가능.
+
+    사용법::
+
+        parser = TextLineParser()
+        for byte in stream:
+            result = parser.feed(byte)
+            if result is not None:
+                pkt_type, packet = result
+    """
+
+    def __init__(self):
+        self.stats = ReceiverStats()
+        self._buf = bytearray()
+
+    def reset(self):
+        """상태 초기화 (에러 카운트는 유지)"""
+        self._buf.clear()
+
+    def feed(self, b: int) -> tuple[int, MainPacket | AuxPacket] | None:
+        """
+        바이트 1개를 공급한다.
+
+        Returns:
+            None — 아직 라인 미완성
+            (pkt_type, packet) — 유효한 라인 파싱 완료 시
+        """
+        if b == 0x0A:  # '\n'
+            line = self._buf.decode('ascii', errors='ignore').strip()
+            self._buf.clear()
+            if not line:
+                return None
+            result = parse_text_line(line)
+            if result is not None:
+                self.stats.good += 1
+            return result
+        if b != 0x0D:  # '\r' 무시
+            self._buf.append(b)
+        return None
+
+
+# ═══════════════════════════════════════════════════════
 #  SerialReceiver — pyserial + 스레드 래핑
 # ═══════════════════════════════════════════════════════
 
@@ -185,7 +236,7 @@ class SerialReceiver:
         self.on_error: Callable[[ReceiverStats], None] | None = None
         self.on_connect: Callable[[bool], None] | None = None
 
-        self._parser = PacketParser()
+        self._parser = TextLineParser()
         self._thread: threading.Thread | None = None
         self._running = False
 
@@ -202,7 +253,7 @@ class SerialReceiver:
         if self.is_running:
             return
         self._running = True
-        self._parser = PacketParser()
+        self._parser = TextLineParser()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 

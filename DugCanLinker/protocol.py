@@ -136,6 +136,73 @@ def verify_packet(pkt_type: int, length: int, payload: bytes, checksum: int) -> 
 
 
 # ═══════════════════════════════════════════════════════
+#  텍스트 라인 파싱 (Arduino Serial.print 출력용)
+# ═══════════════════════════════════════════════════════
+
+import re
+
+_AXIS_RE = re.compile(
+    r'(\w+)\(st=(\d+) -=(\d+) \+=(\d+) N=(\d+) pos=(\d+)\)'
+)
+_BTN_RE = re.compile(r'B1:(\d+) B2:(\d+) B3:(\d+) B4:(\d+)')
+_PGN_RE = re.compile(r'PGN:(0x[0-9A-Fa-f]+)')
+
+
+def _axis_from_match(groups: tuple) -> AxisState:
+    """regex findall 결과 튜플 → AxisState"""
+    _, st, neg, pos, neu, position = groups
+    return AxisState(
+        position=int(position),
+        status=int(st),
+        negative=int(neg),
+        positive=int(pos),
+        neutral=int(neu),
+    )
+
+
+def parse_text_line(line: str) -> tuple[int, MainPacket | AuxPacket] | None:
+    """
+    Arduino 시리얼 텍스트 한 줄을 파싱한다.
+
+    메인 예시:
+      ID:0xCFDD6D1 PGN:0xFDD6 X(st=0 -=1 +=0 N=0 pos=250) Y(st=0 ...pos=128) B1:0 B2:0 B3:0 B4:0
+    AUX 예시:
+      ID:0xCFDD7D1 PGN:0xFDD7 AUX_X(st=0 -=0 +=0 N=1 pos=0)
+
+    Returns:
+        (PKT_MAIN, MainPacket) | (PKT_AUX, AuxPacket) | None
+    """
+    pgn_m = _PGN_RE.search(line)
+    if not pgn_m:
+        return None
+    pgn = int(pgn_m.group(1), 16)
+
+    if pgn == 0xFDD6:
+        axes = _AXIS_RE.findall(line)
+        btns = _BTN_RE.search(line)
+        if len(axes) < 2 or not btns:
+            return None
+        return (PKT_MAIN, MainPacket(
+            x=_axis_from_match(axes[0]),
+            y=_axis_from_match(axes[1]),
+            buttons=ButtonState(
+                btn1=int(btns.group(1)),
+                btn2=int(btns.group(2)),
+                btn3=int(btns.group(3)),
+                btn4=int(btns.group(4)),
+            ),
+        ))
+
+    if pgn == 0xFDD7:
+        axes = _AXIS_RE.findall(line)
+        if not axes:
+            return None
+        return (PKT_AUX, AuxPacket(x=_axis_from_match(axes[0])))
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════
 #  포맷팅 (콘솔 출력용)
 # ═══════════════════════════════════════════════════════
 

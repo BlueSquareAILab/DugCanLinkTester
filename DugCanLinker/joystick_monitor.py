@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 import serial.tools.list_ports
 
 from .protocol import AxisState, MainPacket, AuxPacket, PKT_MAIN, PKT_AUX
-from .serial_receiver import PacketParser, ReceiverStats
+from .serial_receiver import TextLineParser, ReceiverStats
 from .vortex_hid import VortexHID
 
 import serial as pyserial
@@ -52,7 +52,7 @@ class SerialReaderThread(QThread):
         self.port = port
         self.baud = baud
         self._running = False
-        self._parser = PacketParser()
+        self._parser = TextLineParser()
 
     @property
     def stats(self) -> ReceiverStats:

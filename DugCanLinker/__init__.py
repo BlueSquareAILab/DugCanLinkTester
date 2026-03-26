@@ -16,10 +16,11 @@ from .protocol import (
     parse_axis, parse_main_payload, parse_aux_payload,
     xor_checksum, verify_packet,
     format_main, format_aux,
+    parse_text_line,
 )
 
 from .serial_receiver import (
-    PacketParser, SerialReceiver, ReceiverStats,
+    PacketParser, TextLineParser, SerialReceiver, ReceiverStats,
 )
 from .vortex_hid import (
     AxisMapper, VortexHID,
@@ -32,6 +33,7 @@ __all__ = [
     "parse_axis", "parse_main_payload", "parse_aux_payload",
     "xor_checksum", "verify_packet",
     "format_main", "format_aux",
-    "PacketParser", "SerialReceiver", "ReceiverStats",
+    "PacketParser", "TextLineParser", "SerialReceiver", "ReceiverStats",
+    "parse_text_line",
     "AxisMapper", "VortexHID",
 ]

@@ -5,7 +5,6 @@ desc :
 J1939 조이스틱 바이너리 시리얼 수신 (CLI)
 
 사용법:
-  python -m DugCanLinker.joystick_receiver                     # 기본: /dev/ttyUSB0
   python -m DugCanLinker.joystick_receiver --port COM3         # Windows
   python -m DugCanLinker.joystick_receiver --port /dev/ttyACM0
   
@@ -23,7 +22,7 @@ from .serial_receiver import SerialReceiver, ReceiverStats
 
 def main():
     parser = argparse.ArgumentParser(description="J1939 Joystick Serial Receiver (CLI)")
-    parser.add_argument("--port", "-p", default="/dev/ttyUSB0", help="Serial port")
+    parser.add_argument("--port", "-p", required=True, help="Serial port (required, e.g. COM3)")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baud rate")
     args = parser.parse_args()
 
