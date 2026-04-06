@@ -11,16 +11,13 @@ import serial.tools.list_ports
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -32,7 +29,6 @@ from PySide6.QtWidgets import (
 
 from .protocol import AuxPacket, AxisState, DeviceResponse, DigInputReport, JoystickReport, MainPacket, PedalReport
 from .serial_receiver import ReceiverStats, TextLineParser
-from .vortex_hid import VortexHID
 
 
 def _axis_to_dict(axis: AxisState) -> dict[str, int]:
@@ -86,6 +82,7 @@ def _report_to_dict(report: DigInputReport) -> dict:
             "expected_sa": pedal.expected_sa,
             "sa": pedal.sa,
             "valid": pedal.valid,
+            "fresh": pedal.fresh,
             "age_ms": pedal.age_ms,
             "pgn": pedal.pgn,
             "can_id": pedal.can_id,
@@ -488,8 +485,9 @@ class PedalPanel(QGroupBox):
         sa_text = f"sa=0x{report.sa:02X}" if report.sa is not None else "sa=-"
         age_text = "-" if report.age_ms is None else f"{report.age_ms}ms"
         pgn_text = "-" if report.pgn is None else f"0x{report.pgn:04X}"
+        fresh_text = "Y" if report.fresh else "N"
         self.info_label.setText(
-            f"json  {expected_text}  {sa_text}  valid={'Y' if report.valid else '-'} age={age_text}  pgn={pgn_text} len={report.length}"
+            f"json  {expected_text}  {sa_text}  valid={'Y' if report.valid else '-'} fresh={fresh_text} age={age_text}  pgn={pgn_text} len={report.length}"
         )
         can_id_text = "-" if report.can_id is None else f"0x{report.can_id:X}"
         raw_hex = report.hex_bytes if report.hex_bytes else "-"
@@ -605,11 +603,6 @@ class JoystickMonitorWindow(QMainWindow):
         self,
         initial_port: str = "",
         baud: int = 115200,
-        enable_hid: bool = False,
-        hid_deadzone: float = 0.03,
-        hid_expo: float = 1.0,
-        hid_aux_expo: float = 1.0,
-        invert_y: bool = True,
     ):
         super().__init__()
         self.setWindowTitle("DigCanLink Monitor")
@@ -619,7 +612,6 @@ class JoystickMonitorWindow(QMainWindow):
         self._baud = baud
         self._reader: SerialReaderThread | None = None
         self._event_count = 0
-        self._hid: VortexHID | None = None
         self._last_main: MainPacket | None = None
         self._last_aux: AuxPacket | None = None
         self._protocol_mode = "idle"
@@ -735,40 +727,6 @@ class JoystickMonitorWindow(QMainWindow):
             sg.addWidget(widget, row, col + 1)
         root.addWidget(summary_group)
 
-        hid_group = QGroupBox("Vortex HID Link")
-        hid_group.setStyleSheet(group_style)
-        hid_row = QHBoxLayout(hid_group)
-        self.hid_enable = QCheckBox("Xbox Virtual Pad")
-        self.hid_enable.toggled.connect(self._on_hid_toggled)
-        self.hid_status_label = QLabel("Disabled")
-        self.hid_status_label.setStyleSheet("color:#888; font-family:Consolas; font-size:9pt;")
-        self.deadzone_spin = QDoubleSpinBox()
-        self.deadzone_spin.setRange(0.0, 0.90)
-        self.deadzone_spin.setSingleStep(0.01)
-        self.deadzone_spin.setDecimals(2)
-        self.deadzone_spin.setValue(hid_deadzone)
-        self.deadzone_spin.valueChanged.connect(self._sync_hid_settings)
-        self.expo_spin = QDoubleSpinBox()
-        self.expo_spin.setRange(1.0, 4.0)
-        self.expo_spin.setSingleStep(0.10)
-        self.expo_spin.setDecimals(2)
-        self.expo_spin.setValue(hid_expo)
-        self.expo_spin.valueChanged.connect(self._sync_hid_settings)
-        self.aux_expo_spin = QDoubleSpinBox()
-        self.aux_expo_spin.setRange(1.0, 4.0)
-        self.aux_expo_spin.setSingleStep(0.10)
-        self.aux_expo_spin.setDecimals(2)
-        self.aux_expo_spin.setValue(hid_aux_expo)
-        self.aux_expo_spin.valueChanged.connect(self._sync_hid_settings)
-        self.invert_y_check = QCheckBox("Invert Y")
-        self.invert_y_check.setChecked(invert_y)
-        self.invert_y_check.toggled.connect(self._sync_hid_settings)
-        for widget in (self.hid_enable, QLabel("Deadzone"), self.deadzone_spin, QLabel("Main Expo"), self.expo_spin, QLabel("AUX Expo"), self.aux_expo_spin, self.invert_y_check):
-            hid_row.addWidget(widget)
-        hid_row.addStretch()
-        hid_row.addWidget(self.hid_status_label)
-        root.addWidget(hid_group)
-
         joy_row = QHBoxLayout()
         self.lh_panel = JoystickPanel("Joystick LH")
         self.lh_panel.setStyleSheet(group_style)
@@ -786,14 +744,14 @@ class JoystickMonitorWindow(QMainWindow):
         analog_group = QGroupBox("Analog Inputs")
         analog_group.setStyleSheet(group_style)
         ag = QVBoxLayout(analog_group)
-        self.analog_widgets = {name: AnalogValueWidget(name) for name in ("AIN1", "AIN2", "AIN3", "AIN4")}
+        self.analog_widgets = {name: AnalogValueWidget(name) for name in ("AIN1",)}
         for widget in self.analog_widgets.values():
             ag.addWidget(widget)
         io_row.addWidget(analog_group, stretch=1)
         digital_group = QGroupBox("Digital Inputs")
         digital_group.setStyleSheet(group_style)
         dg = QGridLayout(digital_group)
-        self.digital_widgets = {name: BoolStateWidget(name) for name in ("DIN1", "DIN2", "DIN3", "DIN4", "DIN5", "DIN6", "DIN7")}
+        self.digital_widgets = {name: BoolStateWidget(name) for name in ("DIN1", "DIN2", "DIN3", "DIN4", "DIN5", "DIN6")}
         for idx, widget in enumerate(self.digital_widgets.values()):
             dg.addWidget(widget, idx // 2, idx % 2)
         io_row.addWidget(digital_group, stretch=1)
@@ -819,8 +777,7 @@ class JoystickMonitorWindow(QMainWindow):
             """
             QMainWindow, QWidget { background-color:#1e1e23; color:#ddd; }
             QLabel { font-family:Consolas; font-size:10pt; }
-            QComboBox, QPushButton, QDoubleSpinBox, QPlainTextEdit { background-color:#2a2a30; color:#ccc; border:1px solid #555; border-radius:3px; padding:4px 8px; font-family:Consolas; }
-            QCheckBox { font-family:Consolas; font-size:9pt; color:#ccc; }
+            QComboBox, QPushButton, QPlainTextEdit { background-color:#2a2a30; color:#ccc; border:1px solid #555; border-radius:3px; padding:4px 8px; font-family:Consolas; }
             QProgressBar { background-color:#22252b; border:1px solid #555; border-radius:3px; min-height:16px; }
             QProgressBar::chunk { background-color:#3b8cff; border-radius:2px; }
             QPushButton:hover { background-color:#3a3a42; }
@@ -828,9 +785,6 @@ class JoystickMonitorWindow(QMainWindow):
             QPushButton:disabled { color:#666; border-color:#444; background-color:#26262a; }
             """
         )
-        if enable_hid:
-            self.hid_enable.setChecked(True)
-
     def _append_log(self, text: str):
         self.log_view.appendPlainText(text)
 
@@ -880,10 +834,6 @@ class JoystickMonitorWindow(QMainWindow):
     def _format_ms(value: int | None) -> str:
         return "-" if value is None else f"{value} ms"
 
-    def _set_hid_status(self, text: str, color: str):
-        self.hid_status_label.setText(text)
-        self.hid_status_label.setStyleSheet(f"color:{color}; font-family:Consolas; font-size:9pt;")
-
     def _set_command_buttons(self, connected: bool):
         for btn in (self.start_btn, self.stop_btn, self.about_btn, self.dump_btn, self.map_btn):
             btn.setEnabled(connected)
@@ -919,58 +869,9 @@ class JoystickMonitorWindow(QMainWindow):
         for widget in self.digital_widgets.values():
             widget.set_active(False)
 
-    def _on_hid_toggled(self, enabled: bool):
-        if enabled:
-            try:
-                self._hid = VortexHID()
-            except Exception as exc:
-                self._hid = None
-                self._set_hid_status("Unavailable", "#c88")
-                self.hid_enable.blockSignals(True)
-                self.hid_enable.setChecked(False)
-                self.hid_enable.blockSignals(False)
-                QMessageBox.warning(self, "HID Link", "vgamepad 초기화에 실패했습니다.\nuv sync --extra hid 후 다시 실행하세요.\n\n" f"detail: {exc}")
-                return
-            self._sync_hid_settings()
-            self._set_hid_status("Enabled", "#0d8")
-            if self._last_main or self._last_aux:
-                self._hid.update_from_packets(self._last_main, self._last_aux)
-            return
-        if self._hid:
-            self._hid.reset()
-        self._hid = None
-        self._set_hid_status("Disabled", "#888")
-
-    def _sync_hid_settings(self, *_args):
-        if not self._hid:
-            return
-        deadzone = self.deadzone_spin.value()
-        main_expo = self.expo_spin.value()
-        aux_expo = self.aux_expo_spin.value()
-        invert_y = self.invert_y_check.isChecked()
-        self._hid.left_x.deadzone = deadzone
-        self._hid.left_x.expo = main_expo
-        self._hid.left_y.deadzone = deadzone
-        self._hid.left_y.expo = main_expo
-        self._hid.left_y.invert = invert_y
-        self._hid.right_y.deadzone = deadzone
-        self._hid.right_y.expo = aux_expo
-        if self._last_main or self._last_aux:
-            self._hid.update_from_packets(self._last_main, self._last_aux)
-
-    def _reset_hid_output(self):
+    def _reset_packet_state(self):
         self._last_main = None
         self._last_aux = None
-        if self._hid:
-            self._hid.reset()
-
-    def _update_hid_from_report(self, report: DigInputReport):
-        if report.rh.main.valid:
-            self._last_main = report.rh.main.to_packet()
-        if report.rh.aux.valid:
-            self._last_aux = report.rh.aux.to_packet()
-        if self._hid and (self._last_main or self._last_aux):
-            self._hid.update_from_packets(self._last_main, self._last_aux)
 
     def _refresh_ports(self):
         current = self.port_combo.currentText()
@@ -986,7 +887,7 @@ class JoystickMonitorWindow(QMainWindow):
         if self._reader and self._reader.isRunning():
             self._reader.stop()
             self._reader = None
-            self._reset_hid_output()
+            self._reset_packet_state()
             self._set_command_buttons(False)
             self.connect_btn.setText("Connect")
             self.status_label.setText("Disconnected")
@@ -1044,7 +945,7 @@ class JoystickMonitorWindow(QMainWindow):
             )
         else:
             self._connect_sequence += 1
-            self._reset_hid_output()
+            self._reset_packet_state()
             self._set_command_buttons(False)
             self.status_label.setText("Disconnected")
             self.status_label.setStyleSheet("color:#888;")
@@ -1054,7 +955,7 @@ class JoystickMonitorWindow(QMainWindow):
 
     def _on_open_failed(self, message: str):
         self._connect_sequence += 1
-        self._reset_hid_output()
+        self._reset_packet_state()
         self._set_command_buttons(False)
         self.status_label.setText("Open failed")
         self.status_label.setStyleSheet("color:#c88;")
@@ -1067,16 +968,12 @@ class JoystickMonitorWindow(QMainWindow):
         self._set_protocol_mode("legacy_text")
         self._last_main = pkt
         self.rh_panel.update_packets(main=pkt, aux=self._last_aux, sa=0xD1)
-        if self._hid:
-            self._hid.update_main(pkt)
 
     def _on_aux(self, pkt: AuxPacket):
         self._event_count += 1
         self._set_protocol_mode("legacy_text")
         self._last_aux = pkt
         self.rh_panel.update_packets(main=self._last_main, aux=pkt, sa=0xD1)
-        if self._hid:
-            self._hid.update_aux(pkt)
 
     def _on_report(self, report: DigInputReport):
         self._event_count += 1
@@ -1107,7 +1004,6 @@ class JoystickMonitorWindow(QMainWindow):
             widget.set_value(report.ain.get(name, 0))
         for name, widget in self.digital_widgets.items():
             widget.set_active(report.din.get(name, False))
-        self._update_hid_from_report(report)
         self._write_session_log("input_report", _report_to_dict(report))
 
     def _on_response(self, resp: DeviceResponse):
@@ -1169,6 +1065,6 @@ class JoystickMonitorWindow(QMainWindow):
     def closeEvent(self, event):
         if self._reader:
             self._reader.stop()
-        self._reset_hid_output()
+        self._reset_packet_state()
         self._close_session_log()
         event.accept()

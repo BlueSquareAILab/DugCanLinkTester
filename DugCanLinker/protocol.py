@@ -136,6 +136,7 @@ class PedalReport:
     expected_sa: int = 0
     sa: int | None = None
     valid: bool = False
+    fresh: bool = False
     age_ms: int | None = None
     pgn: int | None = None
     can_id: int | None = None
@@ -368,6 +369,7 @@ def _pedal_from_json(obj: dict[str, Any]) -> PedalReport:
         expected_sa=int(obj.get("expected_sa", 0)),
         sa=int(obj["sa"]) if "sa" in obj else None,
         valid=bool(obj.get("valid", False)),
+        fresh=bool(obj.get("fresh", False)),
         age_ms=int(obj["age_ms"]) if "age_ms" in obj else None,
         pgn=int(obj["pgn"]) if "pgn" in obj else None,
         can_id=int(obj["can_id"]) if "can_id" in obj else None,
@@ -472,9 +474,10 @@ def _format_pedal(label: str, report: PedalReport) -> str:
         return f"{label}[{expected} -]"
     sa_text = f"sa=0x{report.sa:02X}" if report.sa is not None else "sa=-"
     age_text = "-" if report.age_ms is None else f"{report.age_ms}ms"
+    fresh_text = "Y" if report.fresh else "N"
     data_text = report.hex_bytes if report.hex_bytes else "-"
     return (
-        f"{label}[{sa_text} age={age_text} "
+        f"{label}[{sa_text} age={age_text} fresh={fresh_text} "
         f"A2={report.axis_2.signed:+4d} A1={report.axis_1.signed:+4d} "
         f"data={data_text}]"
     )
