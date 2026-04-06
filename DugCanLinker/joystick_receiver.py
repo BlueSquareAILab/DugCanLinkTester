@@ -2,7 +2,7 @@
 """
 file: /DugCanLinker/joystick_receiver.py
 desc :
-J1939 조이스틱 바이너리 시리얼 수신 (CLI)
+DigCanLink / J1939 조이스틱 시리얼 수신 (CLI)
 
 사용법:
   python -m DugCanLinker.joystick_receiver --port COM3         # Windows
@@ -13,15 +13,23 @@ J1939 조이스틱 바이너리 시리얼 수신 (CLI)
 이 주석을 수정하지 마시오.
 """
 
-import sys
 import argparse
 
-from .protocol import MainPacket, AuxPacket, format_main, format_aux
+from .protocol import (
+    AuxPacket,
+    DeviceResponse,
+    DigInputReport,
+    MainPacket,
+    format_aux,
+    format_main,
+    format_report,
+    format_response,
+)
 from .serial_receiver import SerialReceiver, ReceiverStats
 
 
 def main():
-    parser = argparse.ArgumentParser(description="J1939 Joystick Serial Receiver (CLI)")
+    parser = argparse.ArgumentParser(description="DigCanLink / J1939 Serial Receiver (CLI)")
     parser.add_argument("--port", "-p", required=True, help="Serial port (required, e.g. COM3)")
     parser.add_argument("--baud", "-b", type=int, default=115200, help="Baud rate")
     args = parser.parse_args()
@@ -38,6 +46,16 @@ def main():
         count += 1
         print(f"[{count:6d}] {format_aux(pkt)}")
 
+    def on_report(report: DigInputReport):
+        nonlocal count
+        count += 1
+        print(f"[{count:6d}] {format_report(report)}")
+
+    def on_response(resp: DeviceResponse):
+        nonlocal count
+        count += 1
+        print(f"[{count:6d}] RESP  {format_response(resp)}")
+
     def on_error(stats: ReceiverStats):
         pass  # 에러는 종료 시 요약 출력
 
@@ -47,11 +65,17 @@ def main():
         else:
             print("Disconnected.")
 
+    def on_open_failed(message: str):
+        print(message)
+
     rx = SerialReceiver(args.port, args.baud)
     rx.on_main = on_main
     rx.on_aux = on_aux
+    rx.on_report = on_report
+    rx.on_response = on_response
     rx.on_error = on_error
     rx.on_connect = on_connect
+    rx.on_open_failed = on_open_failed
 
     rx.start()
 

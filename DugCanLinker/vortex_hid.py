@@ -31,8 +31,7 @@ class AxisMapper:
     invert: bool = False
 
     def map_axis(self, axis: AxisState) -> int:
-        raw = (axis.position - 128) / 127.0
-        raw = _clamp(raw, -1.0, 1.0)
+        raw = _clamp(axis.normalized, -1.0, 1.0)
 
         if abs(raw) < self.deadzone:
             raw = 0.0

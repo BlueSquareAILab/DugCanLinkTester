@@ -1,7 +1,7 @@
 [project]
 name = "dugcanlinktester"
-version = "0.2.0"
-description = "J1939 CAN Joystick binary protocol library + monitor GUI"
+version = "0.3.4"
+description = "DigCanLink serial monitor and simulator integration toolkit"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

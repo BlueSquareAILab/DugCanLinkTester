@@ -1,0 +1,51 @@
+- 현재 기본 대상 장치:
+  - `DigCanLink`
+  - 레거시 호환: `CAN_Joystick_Sample`
+- 프로젝트 맥락:
+  - `DugSimulator` 굴착기(포크레인) 시뮬레이터 프로젝트의 입력 모니터/연동 도구
+  - 물리 CAN 노드는 `Joystick LH`, `Joystick RH`, `Travel Pedal` 총 3개
+  - 시뮬레이터 논리 입력 그룹은 `Joystick LH`, `Joystick RH`, `Pedal Axis 2`, `Pedal Axis 1` 총 4개
+- 현재 파서 지원 포맷:
+  - JSON `input_report`
+  - JSON command response
+  - legacy text main/aux line
+- 레거시 PGN:
+  - RH `FDD6/FDD7`
+  - LH `FDD8/FDD9`
+- GUI 핵심 파일:
+  - `DugCanLinker/dig_monitor_window.py`
+  - `DugCanLinker/joystick_monitor.py`
+- JSON 수신 시 GUI는 RH main/aux를 HID 입력 소스로 사용한다.
+- 연결 직후 GUI가 `about`, `start`를 자동 전송한다.
+- 납품처/외부 시뮬레이터 기준으로는 GUI보다 `SerialReceiver` 또는 `parse_serial_line()` 재사용을 우선 권장한다.
+- `AIN1~AIN4`, `DIN1~DIN7`은 아직 물리 채널명 기준이며 상위 시스템 의미 매핑은 별도다.
+- `signed` 축값은 `neutral=0`, `positive=+raw`, `negative=-raw`를 우선 사용하고, 방향 비트가 모호할 때만 `raw-128` fallback을 쓴다.
+- `DigCanLink` JSON 기준으로 `can_updated`, `joystick_updated`, `can_rx_idle_ms`, `joystick_rx_idle_ms`를 함께 해석한다.
+- `DigCanLink` JSON 기준으로 `pedal_updated`, `pedal_rx_idle_ms`, `pedal_frame_count`, `last_pedal_can_id`도 함께 해석한다.
+- LH 조이스틱 문서에서 `BTN2`는 `Button 2 - Horn`으로 적혀 있다.
+- 2026-04-06 실기 로그 판단:
+  - `LH BTN1/BTN3/BTN4`는 들어오고 `RH BTN2`도 들어오는데 `LH BTN2/Horn`만 0으로 유지됐다.
+  - 구현은 문서 기준과 일치하므로 현재는 소프트웨어보다 하드웨어/배선/Horn 입력 계통 문제 쪽을 우선 의심한다.
+  - 이후 전용 버튼 디버깅 UI와 `buttons.raw` 필드는 제거하고 기본 버튼 상태만 유지했다.
+- 2026-04-06 DIN 판단:
+  - `DIN1~DIN7`은 모두 같은 펌웨어 로직으로 읽으므로, 특정 채널만 이상하면 공통 파싱 버그 가능성은 낮다.
+  - 최근 세션에서 `DIN1`은 자주 active, `DIN2`는 일부 active, `DIN3~DIN7`은 계속 0으로 보였다.
+  - 현재는 internal pull-up의 한계, 떠 있는 선, active-high/open-collector 타입 mismatch, 공통 GND 문제를 우선 의심한다.
+- 주행페달은 현재 `PGN 0xFDDA` raw preview를 유지하되, UI에서 `Axis 2 (2-/2+)`, `Axis 1 (1-/1+)`로 같이 표시한다.
+- 문서 `주행페달` 시트 기준 Source Address는 `0xED` 하나다.
+- Mapping 표 기준 `Axis 2 = Byte1/2`, `Axis 1 = Byte3/4`다.
+- 테스터 GUI는 연결 세션마다 `logs/digcanlink_monitor_*.jsonl` 디버그 로그를 남긴다.
+- 시리얼 오픈 실패는 GUI 콘솔 `print()` 대신 상태 라벨/로그에 남기고, CLI는 콜백으로만 출력한다.
+- Mega 계열은 포트 오픈 직후 자동 리셋될 수 있으므로 GUI는 `about/start`를 즉시 보내지 않고 약 `1.8초/2.1초` 지연 후 전송한다.
+- Device State 정상 상태 판독 기준:
+  - `CAN=OK`
+  - `CAN Update=RX`
+  - `Joy Update=RX`
+  - `CAN Idle`, `Joy Idle`가 현재 리포트 주기(`100ms`)보다 충분히 작음
+  - `CAN Frames`, `Joy Frames`가 계속 증가
+  - `Last CAN ID == Last Joy CAN`이면 가장 최근 버스 프레임이 조이스틱 프레임이었다는 뜻
+  - 예: `0xCFDD7D1`은 RH AUX (`PGN 0xFDD7`, `SA 0xD1`)
+- 방향 라벨 기준:
+  - `X`, `AUX X`: `negative=Left`, `positive=Right`
+  - `Y`: `negative=Down/Back`, `positive=Up/Forward`
+  - GUI 그래프/상태줄도 위 기준을 직접 표시한다.

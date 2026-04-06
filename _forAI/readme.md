@@ -5,21 +5,31 @@
 
 ## 현재 작업 상태 요약
 
-- 현재 수신 기준은 **바이너리 패킷이 아니라 텍스트 시리얼 프로토콜**이다.
-- `DugCanLinkTester`는 Arduino 브리지(`CAN_Joystick_Sample`)가 출력하는 텍스트 한 줄을 파싱해서 GUI/CLI에 표시한다.
+- 현재 기본 수신 대상은 `DigCanLink`의 **JSON 스트림**이다.
+- 기존 `CAN_Joystick_Sample`의 **텍스트 시리얼 프로토콜도 호환 유지**한다.
+- GUI는 `LH/RH 조이스틱`, `Travel Pedal unit`, `AIN1~AIN4`, `DIN1~DIN7`, 장치 상태, 명령/응답 로그까지 표시한다.
+- GUI 상단에서 `start`, `stop`, `about`, `input dump`, `input map` 명령을 직접 전송할 수 있다.
+- Device State의 정상 상태 기준은 `CAN=OK`, `CAN Update=RX`, `Joy Update=RX`, idle 값이 낮고 frame count가 계속 증가하는 경우다.
+- 이 저장소는 `DugSimulator` 굴착기(포크레인) 시뮬레이터 프로젝트의 모니터/연동 도구다.
+- 문서 재확인 기준 물리 CAN 노드는 `Joystick LH`, `Joystick RH`, `Travel Pedal` 총 3개다.
+- 시뮬레이터 논리 입력 그룹은 `Joystick LH`, `Joystick RH`, `Pedal Axis 2`, `Pedal Axis 1` 총 4개로 본다.
 - 최종 사용자 배포 기준은 **Windows GUI 모니터**이고, CLI는 개발/진단용으로 유지한다.
+- 납품처/시뮬레이터 재사용 기준 엔트리로 `SerialReceiver`, `TextLineParser`, `parse_serial_line()`을 문서에 명시했다.
+- `examples/simulator_receiver_minimal.py`를 외부 연동 기준 예제로 추가했다.
+- `signed` 축값은 이제 `raw-128` 고정 가정이 아니라 방향 비트를 우선 반영하는 파생값으로 정리했다.
 - 배포 방식은 **PyInstaller onedir + zip**으로 정리되어 있다.
 - 배포 타깃은 `MonitorOnly`, `MonitorHID` 두 종류다.
 - 기존 `PacketParser`와 바이너리 관련 코드는 향후 프로토콜 전환 가능성을 위해 보존 중이다.
 
-## 2026-03-26 기준 확인된 상태
+## 현재 기준 확인된 상태
 
-- 테스트: `uv run python -m unittest discover tests -v` 기준 **18개 통과**
+- 테스트: `python -m unittest` 기준 **25개 통과**
 - 배포 스크립트: `tools/build_release.ps1`
 - 배포 산출물:
   - `release/DugCanLinkTester-MonitorOnly-win64.zip`
   - `release/DugCanLinkTester-MonitorHID-win64.zip`
-- 루트 `README.md`는 텍스트 프로토콜 기준 설명과 배포 절차를 반영한 상태다.
+- 루트 `README.md`는 `DigCanLink JSON + legacy text` 기준 설명과 배포 절차를 반영한 상태다.
+- 루트 `README.md`에 Device State 정상 상태 예시와 각 필드 판독 기준을 기록했다.
 
 ## 이 폴더 문서 역할
 

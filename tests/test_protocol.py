@@ -31,6 +31,16 @@ class ProtocolPayloadTests(unittest.TestCase):
         self.assertEqual(packet.x.neutral, 1)
         self.assertEqual(packet.seq, 9)
 
+    def test_signed_uses_direction_bits_for_neutral_zero(self):
+        packet = parse_main_payload(bytes([0, 0x01, 1, 0x04, 0, 0, 1]))
+
+        self.assertEqual(packet.x.position, 0)
+        self.assertEqual(packet.x.neutral, 1)
+        self.assertEqual(packet.x.signed, 0)
+        self.assertEqual(packet.y.position, 1)
+        self.assertEqual(packet.y.positive, 1)
+        self.assertEqual(packet.y.signed, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

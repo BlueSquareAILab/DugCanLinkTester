@@ -2,11 +2,11 @@
 
 file : DugCanLinker/serial_receiver.py
 desc :
-serial_receiver.py — 바이트 스트림 패킷 파서 + 시리얼 수신기
+serial_receiver.py — DigCanLink JSON / legacy text 수신기
 
 두 가지 레이어:
-  1. PacketParser    — 순수 상태머신, 바이트를 feed하면 패킷 반환 (I/O 무관)
-  2. SerialReceiver  — pyserial 래핑, 콜백/스레드 방식 수신
+  1. PacketParser    — 기존 바이너리 패킷용 상태머신 (보존)
+  2. SerialReceiver  — DigCanLink JSON / legacy text 수신용 pyserial 래퍼
 
 CLI(joystick_receiver)와 GUI(joystick_monitor) 모두에서 재사용.
 
@@ -25,13 +25,22 @@ from typing import Callable
 import serial
 
 from .protocol import (
-    SYNC1, SYNC2,
-    PKT_MAIN, PKT_AUX,
-    MAIN_PAYLOAD_LEN, AUX_PAYLOAD_LEN,
-    MainPacket, AuxPacket,
-    parse_main_payload, parse_aux_payload,
+    AUX_PAYLOAD_LEN,
+    MAIN_PAYLOAD_LEN,
+    PKT_AUX,
+    PKT_MAIN,
+    PKT_REPORT,
+    PKT_RESPONSE,
+    SYNC1,
+    SYNC2,
+    AuxPacket,
+    DeviceResponse,
+    DigInputReport,
+    MainPacket,
+    parse_aux_payload,
+    parse_main_payload,
+    parse_serial_line,
     verify_packet,
-    parse_text_line,
 )
 
 
@@ -50,26 +59,11 @@ class ReceiverStats:
 # ═══════════════════════════════════════════════════════
 
 class PacketParser:
-    """
-    바이트를 한 개씩 feed()하면 완성된 패킷을 반환하는 상태머신.
-
-    어떤 I/O 소스에서든 사용 가능 (시리얼, TCP, 파일, 테스트 등).
-
-    사용법::
-
-        parser = PacketParser()
-        for byte in stream:
-            result = parser.feed(byte)
-            if result is not None:
-                pkt_type, packet = result
-                # packet은 MainPacket | AuxPacket
-    """
-
-    _WAIT_SYNC1    = 0
-    _WAIT_SYNC2    = 1
-    _WAIT_TYPE     = 2
-    _WAIT_LEN      = 3
-    _WAIT_PAYLOAD  = 4
+    _WAIT_SYNC1 = 0
+    _WAIT_SYNC2 = 1
+    _WAIT_TYPE = 2
+    _WAIT_LEN = 3
+    _WAIT_PAYLOAD = 4
     _WAIT_CHECKSUM = 5
 
     def __init__(self):
@@ -81,19 +75,11 @@ class PacketParser:
         self._idx = 0
 
     def reset(self):
-        """상태 초기화 (에러 카운트는 유지)"""
         self._state = self._WAIT_SYNC1
         self._buf.clear()
         self._idx = 0
 
     def feed(self, b: int) -> tuple[int, MainPacket | AuxPacket] | None:
-        """
-        바이트 1개를 공급한다.
-
-        Returns:
-            None — 아직 패킷 미완성
-            (pkt_type, packet) — 유효한 패킷 완성 시
-        """
         state = self._state
 
         if state == self._WAIT_SYNC1:
@@ -153,51 +139,28 @@ class PacketParser:
 
 
 # ═══════════════════════════════════════════════════════
-#  TextLineParser — 텍스트 라인 기반 파서
+#  TextLineParser — 텍스트/JSON 라인 기반 파서
 # ═══════════════════════════════════════════════════════
 
 class TextLineParser:
-    """
-    Arduino Serial.print() 텍스트 출력을 줄 단위로 파싱하는 상태머신.
-
-    바이트를 한 개씩 feed()하면 줄바꿈 시 파싱 결과를 반환한다.
-    PacketParser와 동일한 인터페이스를 제공하므로 교체 가능.
-
-    사용법::
-
-        parser = TextLineParser()
-        for byte in stream:
-            result = parser.feed(byte)
-            if result is not None:
-                pkt_type, packet = result
-    """
-
     def __init__(self):
         self.stats = ReceiverStats()
         self._buf = bytearray()
 
     def reset(self):
-        """상태 초기화 (에러 카운트는 유지)"""
         self._buf.clear()
 
-    def feed(self, b: int) -> tuple[int, MainPacket | AuxPacket] | None:
-        """
-        바이트 1개를 공급한다.
-
-        Returns:
-            None — 아직 라인 미완성
-            (pkt_type, packet) — 유효한 라인 파싱 완료 시
-        """
-        if b == 0x0A:  # '\n'
-            line = self._buf.decode('ascii', errors='ignore').strip()
+    def feed(self, b: int) -> tuple[int, MainPacket | AuxPacket | DigInputReport | DeviceResponse] | None:
+        if b == 0x0A:
+            line = self._buf.decode("utf-8", errors="ignore").strip()
             self._buf.clear()
             if not line:
                 return None
-            result = parse_text_line(line)
+            result = parse_serial_line(line)
             if result is not None:
                 self.stats.good += 1
             return result
-        if b != 0x0D:  # '\r' 무시
+        if b != 0x0D:
             self._buf.append(b)
         return None
 
@@ -207,38 +170,23 @@ class TextLineParser:
 # ═══════════════════════════════════════════════════════
 
 class SerialReceiver:
-    """
-    시리얼 포트에서 패킷을 수신하여 콜백으로 전달하는 스레드 기반 수신기.
-
-    콜백 시그니처::
-
-        on_main(pkt: MainPacket) -> None
-        on_aux(pkt: AuxPacket) -> None
-        on_error(stats: ReceiverStats) -> None
-        on_connect(connected: bool) -> None
-
-    사용법::
-
-        rx = SerialReceiver("COM3")
-        rx.on_main = lambda pkt: print(pkt)
-        rx.start()
-        ...
-        rx.stop()
-    """
-
     def __init__(self, port: str, baud: int = 115200):
         self.port = port
         self.baud = baud
 
-        # 콜백 (None이면 무시)
         self.on_main: Callable[[MainPacket], None] | None = None
         self.on_aux: Callable[[AuxPacket], None] | None = None
+        self.on_report: Callable[[DigInputReport], None] | None = None
+        self.on_response: Callable[[DeviceResponse], None] | None = None
         self.on_error: Callable[[ReceiverStats], None] | None = None
         self.on_connect: Callable[[bool], None] | None = None
+        self.on_open_failed: Callable[[str], None] | None = None
 
         self._parser = TextLineParser()
         self._thread: threading.Thread | None = None
         self._running = False
+        self._ser: serial.Serial | None = None
+        self._write_lock = threading.Lock()
 
     @property
     def stats(self) -> ReceiverStats:
@@ -249,7 +197,6 @@ class SerialReceiver:
         return self._running and self._thread is not None and self._thread.is_alive()
 
     def start(self):
-        """수신 스레드 시작"""
         if self.is_running:
             return
         self._running = True
@@ -258,19 +205,35 @@ class SerialReceiver:
         self._thread.start()
 
     def stop(self, timeout: float = 2.0):
-        """수신 스레드 정지"""
         self._running = False
         if self._thread:
             self._thread.join(timeout)
             self._thread = None
 
+    def send_line(self, line: str) -> bool:
+        payload = line.strip()
+        if not payload:
+            return False
+        if not payload.endswith("\n"):
+            payload += "\n"
+
+        with self._write_lock:
+            if self._ser is None:
+                return False
+            try:
+                self._ser.write(payload.encode("utf-8"))
+                return True
+            except serial.SerialException:
+                return False
+
     def _run_loop(self):
         try:
             ser = serial.Serial(self.port, self.baud, timeout=0.1)
+            self._ser = ser
         except serial.SerialException as e:
-            print(f"Serial open failed: {e}")
-            if self.on_connect:
-                self.on_connect(False)
+            self._running = False
+            if self.on_open_failed:
+                self.on_open_failed(f"Serial open failed: {e}")
             return
 
         if self.on_connect:
@@ -278,7 +241,7 @@ class SerialReceiver:
 
         try:
             while self._running:
-                chunk = ser.read(64)  # 한번에 여러 바이트 읽기 (효율)
+                chunk = ser.read(128)
                 for b in chunk:
                     result = self._parser.feed(b)
                     if result is None:
@@ -290,6 +253,10 @@ class SerialReceiver:
                         self.on_main(packet)
                     elif pkt_type == PKT_AUX and self.on_aux:
                         self.on_aux(packet)
+                    elif pkt_type == PKT_REPORT and self.on_report:
+                        self.on_report(packet)
+                    elif pkt_type == PKT_RESPONSE and self.on_response:
+                        self.on_response(packet)
 
                     if self._parser.stats.errors > 0 and self.on_error:
                         self.on_error(self._parser.stats)
@@ -297,6 +264,7 @@ class SerialReceiver:
         except serial.SerialException:
             pass
         finally:
+            self._ser = None
             ser.close()
             if self.on_connect:
                 self.on_connect(False)
